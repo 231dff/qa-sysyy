@@ -55,7 +55,8 @@
 │   └── helpers.py           # URL 去重, Token 计数, 限流, 裁剪
 ├── tests/
 │   ├── __init__.py
-│   └── test_core.py         # 单元测试
+│   ├── test_core.py         # 单元测试 (去重/Token/限流/会话)
+│   └── test_e2e.py          # 端到端测试 (Agent 完整流水线)
 ├── config.py                # 全局配置 (pydantic-settings)
 ├── app.py                   # Streamlit 前端入口
 ├── requirements.txt         # Python 依赖
@@ -100,7 +101,53 @@ print(result.answer)
 ### 4. 运行测试
 
 ```bash
+# 全部测试
 pytest tests/ -v
+
+# 仅端到端测试 (Agent 完整流水线)
+pytest tests/test_e2e.py -v
+
+# 仅单元测试
+pytest tests/test_core.py -v
+```
+
+## 🧪 测试分层
+
+项目采用**两层金字塔**测试策略，从工具函数到完整流水线逐层覆盖：
+
+### 第一层: 单元测试 (`test_core.py`) — 33 条
+
+| 测试类 | 覆盖内容 | 条数 |
+|--------|----------|------|
+| `TestURLDeduplicator` | URL 规范化、去重、滑动窗口、跟踪参数 | 7 |
+| `TestTokenCounting` | 中英文 Token 计数 | 4 |
+| `TestContentFingerprint` | SHA-256 内容指纹 | 4 |
+| `TestRateLimiter` | 滑动窗口限流 | 3 |
+| `TestContextTrimming` | Top-K + Token 裁剪 | 4 |
+| `TestFormatSearchContext` | 搜索结果格式化 | 2 |
+| `TestSessionStore` | 会话 TTL 存储 | 5 |
+| `TestModels` | Pydantic 数据模型 | 3 |
+
+### 第二层: 端到端测试 (`test_e2e.py`) — 18 条 ✨新增
+
+覆盖 `graph.py#L366-L384` 的**完整 Agent 流水线**，使用 mock 隔离外部 API：
+
+| 测试类 | 覆盖路径 | 条数 |
+|--------|----------|------|
+| `TestAgentPipelineE2E` | ①完整正常流程 ②搜索失败→降级 ③答案生成失败→二次降级 ④多轮对话 ⑤历史裁剪 ⑥改写失败→回退 | 6 |
+| `TestRoutingLogic` | 搜索后路由 (成功/失败) + 生成后路由 (成功/失败) | 4 |
+| `TestNodeBehaviors` | 错误恢复节点 + 搜索空查询 + 生成降级 | 3 |
+| `TestSessionManagement` | 自动生成 session_id + 清除会话 | 2 |
+| `TestResultValidation` | 来源去重 + 延迟记录 + 流式输出 | 3 |
+
+```
+        ┌─────────────────────────────────────────────────┐
+        │           E2E: Agent 完整流水线 (18 条)         │
+        │  改写 → 搜索 → 路由 → 答案生成 → 错误恢复 → 历史  │
+        ├─────────────────────────────────────────────────┤
+        │     单元测试: 工具 & 模型 (33 条)                │
+        │  去重 | Token | 限流 | 裁剪 | 会话 | 格式化       │
+        └─────────────────────────────────────────────────┘
 ```
 
 ## 🔧 工具注册
