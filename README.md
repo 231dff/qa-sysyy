@@ -7,6 +7,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Python-3.12+-blue?logo=python" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/Next.js-16-000000?logo=next.js" alt="Next.js 16">
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react" alt="React 19">
   <img src="https://img.shields.io/badge/Tests-131%20passed-success?logo=pytest" alt="131 tests">
   <img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker" alt="Docker">
 </p>
@@ -15,7 +16,7 @@
 
 # 🔍 智能搜索助手 — 实时联网搜索 Agent 系统
 
-基于 **LangGraph** + **Tavily API** + **FastAPI** + **Next.js** 构建的实时联网搜索 Agent。
+基于 **LangGraph** + **Tavily API** + **FastAPI** + **Next.js 16** + **Streamlit** 构建的实时联网搜索 Agent。
 
 ## ✨ 核心特性
 
@@ -26,19 +27,23 @@
 - **多层容错**: 指数退避重试 + LLM 降级回答，异常期可用性 **95%+**
 - **多轮对话**: 基于会话 ID 的上下文缓存，跨轮意图连贯
 - **限流保护**: 搜索 API 配额管理与滑动窗口限流
-- **现代化前端**: Next.js 14 + TypeScript + Tailwind CSS
+- **双前端**: Next.js 16 生产前端 + Streamlit 开发调试面板
 
 ## 🏗️ 架构
 
 ```
-┌──────────────┐       SSE Stream       ┌──────────────┐       HTTP         ┌────────────────┐
-│  Next.js 前端 │ ◄─────────────────── │  FastAPI 后端  │ ──────────────────► │ LLM API (OpenAI │
-│ (port 3000)   │   event: progress    │  (port 8000)   │   streaming POST   │  compatible)    │
-│              │   event: token        │               │                    │                │
-│ React + TS   │   event: sources      │  LangGraph     │ ──────────────────► │ Tavily Search   │
-│ Tailwind CSS │   event: done         │  Agent Pipeline│   Search API       │ API             │
-│ App Router   │   event: error        │               │                    │                │
-└──────────────┘                       └──────────────┘                    └────────────────┘
+┌──────────────────┐     SSE Stream       ┌──────────────┐       HTTP         ┌────────────────┐
+│ Next.js 16 前端   │ ◄─────────────────── │  FastAPI 后端  │ ──────────────────► │ LLM API (OpenAI │
+│ (port 3001)       │   event: progress    │  (port 8000)   │   streaming POST   │  compatible)    │
+│                   │   event: token       │               │                    │                │
+│ React 19 + TS     │   event: sources     │  LangGraph     │ ──────────────────► │ Tavily Search   │
+│ Tailwind CSS 4    │   event: done        │  Agent Pipeline│   Search API       │ API             │
+│ App Router        │   event: error       │               │                    │                │
+├──────────────────┤                       ├───────────────┤                    └────────────────┘
+│ Streamlit 面板    │                       │ 服务器重启时自动 │
+│ (port 8501)       │                       │ 触发构建         │
+│ 开发调试用         │                       │                 │
+└──────────────────┘                       └─────────────────┘
 ```
 
 ### Agent 工作流
@@ -58,40 +63,66 @@
 ## 📁 项目结构
 
 ```
-问答系统/
-├── agent/
-│   ├── __init__.py          # Agent 模块
-│   ├── graph.py             # LangGraph 状态图 (核心编排)
-│   ├── models.py            # Pydantic 数据模型
-│   └── streaming.py         # SSE 流式编排器
-├── tools/
-│   ├── __init__.py          # 工具模块
-│   └── registry.py          # 工具注册: 搜索/改写/打分/降级
-├── memory/
-│   ├── __init__.py          # 内存模块
-│   └── session_store.py     # 会话缓存 (TTL 过期)
-├── utils/
-│   ├── __init__.py          # 工具函数模块
-│   └── helpers.py           # URL 去重, Token 计数, 限流, 裁剪
-├── tests/
-│   ├── test_core.py         # 单元测试 (去重/Token/限流/会话)
-│   ├── test_registry.py     # 工具注册中心测试
-│   ├── test_graph.py        # Agent 状态图节点测试
-│   ├── test_config.py       # 配置加载测试
-│   └── test_e2e.py          # 端到端测试
-├── evals/
-│   ├── golden_dataset.json  # 黄金行为数据集 (33 用例)
-│   ├── evaluate.py          # 自动化评估框架
-│   └── report.html          # HTML 评估报告
-├── server.py                # FastAPI 后端入口
-├── config.py                # 全局配置 (pydantic-settings)
-├── requirements.txt         # Python 依赖
-├── .env.example             # 环境变量模板
-├── frontend/                # Next.js 前端项目
-├── Dockerfile.backend        # 后端 Docker 镜像
-├── Dockerfile.frontend       # 前端 Docker 镜像
-├── docker-compose.yml        # 一键部署编排
-├── .dockerignore             # Docker 忽略规则
+qa/
+├── agent/                          # Agent 核心模块
+│   ├── __init__.py                 # 模块入口
+│   ├── graph.py                    # LangGraph 状态图 (核心编排)
+│   ├── models.py                   # Pydantic 数据模型
+│   └── streaming.py                # SSE 流式编排器
+├── tools/                          # 工具注册中心
+│   ├── __init__.py                 # 工具模块
+│   └── registry.py                 # 工具注册: 搜索/改写/打分/降级
+├── memory/                         # 会话缓存
+│   ├── __init__.py                 # 内存模块
+│   └── session_store.py            # 会话缓存 (TTL 过期)
+├── utils/                          # 工具函数
+│   ├── __init__.py                 # 工具函数模块
+│   └── helpers.py                  # URL 去重, Token 计数, 限流, 裁剪
+├── tests/                          # 测试 (131 条)
+│   ├── test_core.py                # 单元测试 (去重/Token/限流/会话)
+│   ├── test_registry.py            # 工具注册中心测试
+│   ├── test_graph.py               # Agent 状态图节点测试
+│   ├── test_config.py              # 配置加载测试
+│   └── test_e2e.py                 # 端到端测试
+├── evals/                          # 行为评估
+│   ├── golden_dataset.json         # 黄金行为数据集 (33 用例)
+│   ├── evaluate.py                 # 自动化评估框架
+│   └── report.html                 # HTML 评估报告
+├── frontend/                       # Next.js 16 前端
+│   ├── app/
+│   │   ├── layout.tsx              # 根布局 (Geist 字体)
+│   │   ├── page.tsx                # 应用入口页
+│   │   ├── globals.css             # 全局样式
+│   │   └── api/chat/stream/
+│   │       └── route.ts            # API 代理 (Next.js → FastAPI)
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ChatArea.tsx         # 聊天区域 (消息列表 + 输入框)
+│   │   │   ├── ChatInput.tsx        # 消息输入框
+│   │   │   ├── MessageBubble.tsx    # 消息气泡
+│   │   │   ├── Sidebar.tsx          # 侧边栏 (会话管理)
+│   │   │   ├── SourcesPanel.tsx     # 来源面板
+│   │   │   ├── MetaBar.tsx          # 元信息栏
+│   │   │   └── StreamingToken.tsx   # 流式 Token 动画
+│   │   ├── hooks/
+│   │   │   └── useSSE.ts            # SSE 流式连接 Hook
+│   │   ├── lib/
+│   │   │   ├── types.ts             # TypeScript 类型定义
+│   │   │   └── api.ts               # API 调用封装
+│   │   └── providers/
+│   │       └── ChatProvider.tsx      # 聊天状态管理 (React Context)
+│   ├── next.config.ts               # Next.js 配置 (rewrites 代理)
+│   ├── package.json                 # 依赖: Next.js 16, React 19, Tailwind CSS 4
+│   └── tsconfig.json                # TypeScript 配置
+├── server.py                       # FastAPI 后端入口 (SSE + REST API)
+├── app.py                           # Streamlit 开发调试面板
+├── config.py                        # 全局配置 (pydantic-settings)
+├── requirements.txt                 # Python 依赖
+├── Dockerfile.backend               # 后端 Docker 镜像 (python:3.12-slim)
+├── Dockerfile.frontend              # 前端 Docker 镜像 (多阶段 node:22-alpine)
+├── docker-compose.yml               # 一键部署编排
+├── .dockerignore                    # Docker 忽略规则
+├── fix-and-start.ps1                # Windows 一键修复 & 启动脚本
 └── README.md
 ```
 
@@ -127,6 +158,12 @@ docker compose logs -f frontend   # 前端日志
 docker compose down
 ```
 
+**Windows 用户**: 如果遇到 Docker Desktop gRPC 问题，可以直接运行一键脚本：
+
+```powershell
+.\fix-and-start.ps1
+```
+
 **关于 `docker compose up -d`**：
 - `-d` 表示后台运行（daemon），不加 `-d` 可以在终端直接看到日志
 - `--build` 表示每次启动前重新构建镜像，确保代码更新生效
@@ -136,7 +173,7 @@ docker compose down
 | 服务 | 容器内端口 | 宿主机端口 | 说明 |
 |------|-----------|-----------|------|
 | `search-backend` | 8000 | 8000 | FastAPI + uvicorn，SSE 流式聊天 |
-| `search-frontend` | 3000 | 3000 | Next.js 生产模式 |
+| `search-frontend` | 3000 | 3001 | Next.js 16 生产模式 |
 
 **常见问题排查**：
 
@@ -166,17 +203,17 @@ docker compose down && docker compose up -d --build
 #### 1. 安装 Python 依赖
 
 ```bash
-cd 问答系统
 pip install -r requirements.txt
 ```
 
 #### 2. 配置 API 密钥
 
 ```bash
-cp .env.example .env
-# 编辑 .env 填入你的 API Key
+# 创建 .env 文件并填入 API Key
 # LLM_API_KEY=sk-xxx
 # TAVILY_API_KEY=tvly-xxx
+# LLM_API_BASE=https://api.openai.com/v1   (可选，默认值)
+# LLM_MODEL=gpt-4o-mini                      (可选)
 ```
 
 #### 3. 启动后端
@@ -185,7 +222,7 @@ cp .env.example .env
 # FastAPI 开发服务器 (port 8000)
 uvicorn server:app --reload --port 8000
 
-# 或
+# 或直接运行
 python server.py
 ```
 
@@ -193,17 +230,25 @@ python server.py
 - API 文档: http://localhost:8000/docs
 - 健康检查: http://localhost:8000/api/health
 
-### 4. 启动前端
+#### 4. 启动前端 (二选一)
+
+**Next.js 生产前端**:
 
 ```bash
 cd frontend
 npm install
 npm run dev
+# → http://localhost:3000
 ```
 
-打开 http://localhost:3000 即可使用。
+**Streamlit 开发面板**:
 
-### 5. 运行测试
+```bash
+streamlit run app.py
+# → http://localhost:8501
+```
+
+#### 5. 运行测试
 
 ```bash
 # 全部测试 (131 条)
@@ -296,7 +341,7 @@ python -m evals.evaluate -r html  # 生成 HTML 报告
 ### SSE 事件类型
 
 ```
-event: progress  → {"node":"rewrite|search|generate|fallback","message":"..."}
+event: progress  → {"node":"rewrite|search|generate|fallback|score","message":"..."}
 event: token     → {"text":"逐token文本"}
 event: sources   → {"sources":[{url,title,snippet}]}
 event: done      → {confidence,latency_ms,tokens_used,is_fallback}
@@ -324,8 +369,7 @@ event: error     → {message,code}
 
 ```bash
 # 1. 配置 API 密钥
-cp .env.example .env
-# 编辑 .env 填入真实的 API Key（示例中是占位符，不填会报错）
+# 创建 .env 文件并填入真实的 API Key
 # LLM_API_KEY=sk-your-real-key
 # TAVILY_API_KEY=tvly-your-real-key
 
@@ -370,11 +414,9 @@ curl http://localhost:8000/api/health
 # → {"status":"ok","active_sessions":0}
 
 # 验证前端
-curl -I http://localhost:3000
+curl -I http://localhost:3001
 # → HTTP/1.1 200 OK
 ```
-
-### 镜像文件说明
 
 ## 📈 效果指标
 
