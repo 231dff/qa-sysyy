@@ -36,3 +36,8 @@ htmlcov/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml

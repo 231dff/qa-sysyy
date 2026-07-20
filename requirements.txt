@@ -10,8 +10,9 @@ langchain-community>=0.3.0
 langchain-openai>=0.2.0
 langchain-core>=0.3.0
 
-# ———— Web 前端 ————
-streamlit>=1.28.0
+# ———— Web 后端 ————
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
 
 # ———— HTTP & API ————
 httpx>=0.27.0

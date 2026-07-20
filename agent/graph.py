@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -131,11 +132,15 @@ async def node_search(state: AgentState) -> dict:
 # ============================================================
 # LangGraph Node 3: 生成答案
 # ============================================================
-async def node_generate_answer(state: AgentState) -> dict:
+async def node_generate_answer(
+    state: AgentState,
+    stream_callback=None,
+) -> dict:
     """
     节点: 生成答案
     - 如果搜索成功：基于搜索片段生成引用答案
     - 如果搜索失败：降级为 LLM 参数化知识回答
+    - 当 stream_callback 不为 None 时，使用 HTTP 流式调用逐 token 推送
     """
     agent_cfg = get_agent_config()
     api_cfg = get_api_config()
@@ -183,42 +188,102 @@ async def node_generate_answer(state: AgentState) -> dict:
             messages.append({"role": msg["role"], "content": msg["content"][:500]})
     messages.append({"role": "user", "content": user_message})
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{api_cfg.llm_api_base}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_cfg.llm_api_key.get_secret_value()}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": api_cfg.llm_model,
-                    "temperature": 0.3,
-                    "messages": messages,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            answer_text = data["choices"][0]["message"]["content"]
+    # ── 流式路径：stream_callback 非 None ──
+    if stream_callback is not None:
+        accumulated_text = ""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{api_cfg.llm_api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_cfg.llm_api_key.get_secret_value()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": api_cfg.llm_model,
+                        "temperature": 0.3,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = (
+                                    chunk.get("choices", [{}])[0]
+                                    .get("delta", {})
+                                    .get("content", "")
+                                )
+                                if delta:
+                                    await stream_callback(delta)
+                                    accumulated_text += delta
+                            except json.JSONDecodeError:
+                                continue
 
-    except Exception as exc:
-        if agent_cfg.verbose:
-            print(f"[答案生成失败] {exc}")
-        # 二次降级
-        fallback_text = await generate_fallback_answer(user_query, history)
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        return {
-            "final_answer": GeneratedAnswer(
-                query=user_query,
-                answer=fallback_text,
-                sources=[],
-                confidence=0.4,
-                is_fallback=True,
-                tokens_used=count_tokens(fallback_text),
-                latency_ms=elapsed_ms,
-            ),
-            "error": str(exc),
-        }
+            answer_text = accumulated_text or "（生成失败：未收到有效响应）"
+
+        except Exception as exc:
+            if agent_cfg.verbose:
+                print(f"[流式答案生成失败] {exc}")
+            # 二次降级 (streaming fallback)
+            fallback_text = await generate_fallback_answer(user_query, history)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            return {
+                "final_answer": GeneratedAnswer(
+                    query=user_query,
+                    answer=fallback_text,
+                    sources=[],
+                    confidence=0.4,
+                    is_fallback=True,
+                    tokens_used=count_tokens(fallback_text),
+                    latency_ms=elapsed_ms,
+                ),
+                "error": str(exc),
+            }
+    else:
+        # ── 阻塞路径 (向后兼容，所有现有测试走此路径) ──
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{api_cfg.llm_api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_cfg.llm_api_key.get_secret_value()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": api_cfg.llm_model,
+                        "temperature": 0.3,
+                        "messages": messages,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                answer_text = data["choices"][0]["message"]["content"]
+
+        except Exception as exc:
+            if agent_cfg.verbose:
+                print(f"[答案生成失败] {exc}")
+            # 二次降级
+            fallback_text = await generate_fallback_answer(user_query, history)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            return {
+                "final_answer": GeneratedAnswer(
+                    query=user_query,
+                    answer=fallback_text,
+                    sources=[],
+                    confidence=0.4,
+                    is_fallback=True,
+                    tokens_used=count_tokens(fallback_text),
+                    latency_ms=elapsed_ms,
+                ),
+                "error": str(exc),
+            }
 
     elapsed_ms = (time.perf_counter() - start) * 1000
 

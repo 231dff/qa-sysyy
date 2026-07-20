@@ -1,0 +1,365 @@
+{
+  "meta": {
+    "name": "智能搜索助手 — 黄金行为数据集",
+    "version": "1.0.0",
+    "description": "每条用例验证的是代码路径行为（流水线走对、状态写对、降级触发对），而非输出答案的语义正确性。所有断言都是白盒结构断言。",
+    "created": "2025-07-19",
+    "total_cases": 30
+  },
+  "cases": [
+    {
+      "id": "happy-001",
+      "category": "happy_path",
+      "query": "今天有什么重大新闻？",
+      "description": "标准事实查询 — 验证完整流水线正常执行",
+      "expected": {
+        "nodes_called": ["rewrite_query", "search", "generate_answer"],
+        "is_fallback": false,
+        "confidence": 0.85,
+        "sources_non_empty": true,
+        "sources_urls_unique": true,
+        "answer_non_empty": true,
+        "latency_ms_gt": 0,
+        "tokens_used_gte": 0,
+        "search_failed": false,
+        "error_is_none": true,
+        "history_count_gte": 2
+      }
+    },
+    {
+      "id": "happy-002",
+      "category": "happy_path",
+      "query": "苹果公司现在的股价是多少？",
+      "description": "实时数据查询 — 验证正常流程 + 改写输出非空",
+      "expected": {
+        "rewritten_non_empty": true,
+        "is_fallback": false,
+        "sources_non_empty": true
+      }
+    },
+    {
+      "id": "happy-003",
+      "category": "happy_path",
+      "query": "Python 和 Rust 哪个更适合系统编程？",
+      "description": "对比查询 — 验证带子查询的正常流程",
+      "expected": {
+        "is_fallback": false,
+        "sources_non_empty": true
+      }
+    },
+    {
+      "id": "happy-004",
+      "category": "happy_path",
+      "query": "最新 Python 3.13 有哪些新特性？",
+      "description": "教程查询 — 验证 intent 和改写",
+      "expected": {
+        "is_fallback": false,
+        "confidence": 0.85,
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "happy-005",
+      "category": "happy_path",
+      "query": "Claude 和 GPT-4 哪个更强？",
+      "description": "主观对比 — 验证来源去重",
+      "expected": {
+        "is_fallback": false,
+        "sources_non_empty": true,
+        "sources_urls_unique": true
+      }
+    },
+    {
+      "id": "happy-006",
+      "category": "happy_path",
+      "query": "北京到上海的航班",
+      "description": "短事实查询 — 验证正常流程",
+      "expected": {
+        "is_fallback": false,
+        "sources_non_empty": true
+      }
+    },
+    {
+      "id": "degrade-001",
+      "category": "degradation",
+      "query": "今天有什么重大新闻？",
+      "description": "搜索 API 返回空结果 → 触发降级回答（一级降级）",
+      "context": { "search_returns_empty": true },
+      "expected": {
+        "is_fallback": true,
+        "confidence": 0.5,
+        "sources_empty": true,
+        "answer_non_empty": true,
+        "answer_has_fallback_marker": true,
+        "nodes_called": ["rewrite_query", "search", "generate_answer"]
+      }
+    },
+    {
+      "id": "degrade-002",
+      "category": "degradation",
+      "query": "最新的科技趋势有哪些？",
+      "description": "答案生成 LLM 异常 → 触发二次降级（置信度 0.4）",
+      "context": { "llm_answer_raises_exception": true },
+      "expected": {
+        "is_fallback": true,
+        "confidence": 0.4,
+        "sources_empty": true,
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "degrade-003",
+      "category": "degradation",
+      "query": "查询改写 LLM 不可用时应回退到原始查询",
+      "context": { "rewrite_raises_exception": true },
+      "expected": {
+        "is_fallback": false,
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "degrade-004",
+      "category": "degradation",
+      "query": "相关性打分 LLM 失败时应使用原始搜索分数",
+      "context": { "scoring_raises_exception": true },
+      "expected": {
+        "is_fallback": false,
+        "sources_non_empty": true
+      }
+    },
+    {
+      "id": "degrade-005",
+      "category": "degradation",
+      "query": "搜索 API 超时 → 降级回答",
+      "context": { "search_raises_timeout": true },
+      "expected": {
+        "is_fallback": true,
+        "confidence": 0.5,
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "route-001",
+      "category": "routing",
+      "query": "任意查询",
+      "context": { "route_test": "after_search_success" },
+      "expected": {
+        "route_after_search": "generate"
+      }
+    },
+    {
+      "id": "route-002",
+      "category": "routing",
+      "query": "任意查询",
+      "context": { "route_test": "after_search_failure" },
+      "expected": {
+        "route_after_search": "error"
+      }
+    },
+    {
+      "id": "route-003",
+      "category": "routing",
+      "query": "任意查询",
+      "context": { "route_test": "after_generate_success" },
+      "expected": {
+        "route_after_generate": "__end__"
+      }
+    },
+    {
+      "id": "route-004",
+      "category": "routing",
+      "query": "任意查询",
+      "context": { "route_test": "after_generate_failure" },
+      "expected": {
+        "route_after_generate": "error"
+      }
+    },
+    {
+      "id": "route-005",
+      "category": "routing",
+      "query": "任意查询",
+      "context": { "route_test": "after_search_missing_key" },
+      "expected": {
+        "route_after_search": "generate"
+      }
+    },
+    {
+      "id": "multi-001",
+      "category": "multi_turn",
+      "query": ["今天有什么新闻？", "详细说说第一条"],
+      "context": { "session_id": "multi-001-session", "expected_rounds": 2 },
+      "expected": {
+        "final_history_count": 4,
+        "round_1_is_fallback": false,
+        "round_2_is_fallback": false
+      }
+    },
+    {
+      "id": "multi-002",
+      "category": "multi_turn",
+      "query": ["问题 1", "问题 2", "问题 3", "问题 4", "问题 5"],
+      "context": { "session_id": "multi-002-session", "max_history_turns": 2, "expected_rounds": 5 },
+      "expected": {
+        "final_history_count_lte": 4
+      }
+    },
+    {
+      "id": "multi-003",
+      "category": "multi_turn",
+      "query": ["你好", "我之前问的是什么？"],
+      "context": { "session_id": "multi-003-session", "expected_rounds": 2 },
+      "expected": {
+        "final_history_count": 4
+      }
+    },
+    {
+      "id": "multi-004",
+      "category": "multi_turn",
+      "query": ["搜索 AI 新闻"],
+      "context": { "session_id": "multi-004-session", "expected_rounds": 1, "clear_after": true },
+      "expected": {
+        "history_after_clear": 0
+      }
+    },
+    {
+      "id": "edge-001",
+      "category": "edge_case",
+      "query": "",
+      "description": "空查询 — 系统应优雅处理不崩溃",
+      "expected": {
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "edge-002",
+      "category": "edge_case",
+      "query": "你好",
+      "description": "极短问候 — 验证不丢失意图",
+      "expected": {
+        "is_fallback": false,
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "edge-003",
+      "category": "edge_case",
+      "query": "什么是AI人工智能机器学习深度学习神经网络大语言模型Transformer注意力机制GPTBERT迁移学习强化学习监督学习无监督学习GAN生成对抗网络扩散模型多模态大模型RAG检索增强生成Agent智能体提示工程思维链",
+      "description": "超长查询 — 验证不崩溃",
+      "expected": {
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "edge-004",
+      "category": "edge_case",
+      "query": "✨🎉 今天有什么 💥 重大 💫 新闻 💯 ???",
+      "description": "含 emoji 和特殊字符 — 验证健壮性",
+      "expected": {
+        "answer_non_empty": true
+      }
+    },
+    {
+      "id": "edge-005",
+      "category": "edge_case",
+      "query": "今天有什么重大新闻？",
+      "description": "无 session_id → 自动生成",
+      "expected": {
+        "session_count_gt": 0
+      }
+    },
+    {
+      "id": "tool-001",
+      "category": "tool_behavior",
+      "query": "测试查询",
+      "context": { "tool_test": "tavily_search_success" },
+      "expected": {
+        "tool_is_SearchResponse": true,
+        "tool_query_matches": true,
+        "tool_results_count_gte": 2,
+        "tool_error_is_none": true,
+        "tool_search_time_ms_gt": 0
+      }
+    },
+    {
+      "id": "tool-002",
+      "category": "tool_behavior",
+      "query": "测试查询",
+      "context": { "tool_test": "tavily_search_timeout" },
+      "expected": {
+        "tool_is_SearchResponse": true,
+        "tool_results_empty": true,
+        "tool_error_contains": true
+      }
+    },
+    {
+      "id": "tool-003",
+      "category": "tool_behavior",
+      "query": "请告诉我关于量子计算的最新进展",
+      "context": { "tool_test": "rewrite_query_success" },
+      "expected": {
+        "tool_is_RewrittenQuery": true,
+        "rewritten_non_empty": true,
+        "language_non_empty": true,
+        "intent_non_empty": true,
+        "original_preserved": true
+      }
+    },
+    {
+      "id": "tool-004",
+      "category": "tool_behavior",
+      "query": "测试查询",
+      "context": { "tool_test": "score_relevance_success" },
+      "expected": {
+        "tool_is_RelevanceScores": true,
+        "tool_all_scores_in_range": true,
+        "tool_urls_preserved": true
+      }
+    },
+    {
+      "id": "tool-005",
+      "category": "tool_behavior",
+      "query": "测试查询",
+      "context": { "tool_test": "fallback_answer_success" },
+      "expected": {
+        "answer_is_string": true,
+        "answer_non_empty": true,
+        "answer_has_fallback_marker": true
+      }
+    },
+    {
+      "id": "tool-006",
+      "category": "tool_behavior",
+      "query": "测试查询",
+      "context": { "tool_test": "search_and_filter_pipeline" },
+      "expected": {
+        "pipeline_has_tuple": true,
+        "pipeline_deduped_non_empty": true,
+        "pipeline_fragments_non_empty": true,
+        "pipeline_fragments_lte_5": true
+      }
+    },
+    {
+      "id": "state-001",
+      "category": "state_integrity",
+      "query": "测试",
+      "context": { "state_test": "agent_state_keys" },
+      "expected": {
+        "agent_state_has_all_keys": true
+      }
+    },
+    {
+      "id": "state-002",
+      "category": "state_integrity",
+      "query": "测试",
+      "context": { "state_test": "generated_answer_model" },
+      "expected": {
+        "confidence_in_range": true,
+        "is_fallback_is_bool": true,
+        "sources_is_list": true,
+        "answer_is_str": true,
+        "latency_is_number": true,
+        "tokens_is_int": true
+      }
+    }
+  ]
+}
