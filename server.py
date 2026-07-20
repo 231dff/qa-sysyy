@@ -1,17 +1,19 @@
 """
 智能搜索助手 — FastAPI 后端
 提供 SSE 流式聊天端点 + 会话管理 REST API
+支持 Prometheus 指标收集与 95% SLA 可用性统计
 """
 from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 # ensure project root on path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -22,6 +24,16 @@ from agent.streaming import run_stream_sse
 from config import get_api_config, get_agent_config
 from memory.session_store import get_session_store
 from utils.helpers import generate_session_id
+from utils.http_client import set_shared_client, reset_shared_client
+from utils.metrics import (
+    record_http_request,
+    record_sse_stream,
+    update_active_sessions,
+    get_metrics_text,
+    get_all_stats,
+)
+
+import httpx
 
 app = FastAPI(
     title="智能搜索助手 API",
@@ -43,6 +55,57 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── HTTP 指标中间件: 记录所有请求的计数 / 延迟 / 状态码 ──
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    """Prometheus 指标中间件: 记录每个请求的延迟与结果"""
+    start = time.perf_counter()
+    status_code = 500
+    is_error = False
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        is_error = status_code >= 400
+        return response
+    except Exception:
+        is_error = True
+        raise
+    finally:
+        duration = time.perf_counter() - start
+        path = request.url.path
+        # 跳过 /metrics 自身以避免递归
+        if path != "/api/metrics":
+            record_http_request(
+                method=request.method,
+                path=path,
+                status_code=status_code,
+                duration=duration,
+                is_error=is_error,
+            )
+
+
+# ── 生命周期: 共享 HTTP 客户端 (连接池复用, 消除 TCP/TLS 握手延迟) ──
+@app.on_event("startup")
+async def startup():
+    """创建全局 httpx AsyncClient，复用 TCP 连接池"""
+    import httpx
+    client = httpx.AsyncClient(
+        timeout=60.0,
+        limits=httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        ),
+    )
+    set_shared_client(client)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """关闭全局 httpx AsyncClient"""
+    reset_shared_client()
 
 # ── 全局单例 ──
 _agent: Optional[SearchAgent] = None
@@ -93,7 +156,11 @@ async def chat_stream(req: ChatRequest, request: Request):
     agent = get_agent()
     sid = req.session_id or generate_session_id()
 
+    record_sse_stream("started")
+    disconnected = False
+
     async def generate():
+        nonlocal disconnected
         async for sse_data in run_stream_sse(
             agent=agent,
             user_query=req.query,
@@ -104,9 +171,15 @@ async def chat_stream(req: ChatRequest, request: Request):
         ):
             # 客户端断开时停止
             if await request.is_disconnected():
+                disconnected = True
                 break
             yield sse_data.encode("utf-8")
             await asyncio.sleep(0)
+
+        if disconnected:
+            record_sse_stream("disconnected")
+        else:
+            record_sse_stream("completed")
 
     return StreamingResponse(
         generate(),
@@ -158,9 +231,36 @@ async def get_config_defaults():
 @app.get("/api/health")
 async def health():
     agent = get_agent()
+    active = len(agent._sessions)
+    update_active_sessions(active)
     return HealthResponse(
         status="ok",
-        active_sessions=len(agent._sessions),
+        active_sessions=active,
+    )
+
+
+# ============================================================
+# Prometheus 指标端点
+# ============================================================
+@app.get("/api/metrics")
+async def metrics(format: Optional[str] = None):
+    """
+    可观测性端点: 返回 Prometheus 文本格式指标或 JSON 可用性统计。
+
+    - 默认 (Accept: text/plain 或无 format) → Prometheus 文本格式
+    - ?format=json → JSON 格式 (含可用性统计 + 指标快照)
+    - ?format=availability → 仅可用性统计 (95% SLA)
+    """
+    if format == "json":
+        return JSONResponse(content=get_all_stats())
+    if format == "availability":
+        from utils.metrics import get_availability_stats
+        return JSONResponse(content=get_availability_stats())
+
+    # 默认返回 Prometheus 文本格式
+    return Response(
+        content=get_metrics_text(),
+        media_type="text/plain; charset=utf-8",
     )
 
 

@@ -229,24 +229,33 @@ class Runner:
     class _Patcher:
         def __init__(self, handler):
             self.handler = handler
-            self.patches = []
-            self.mocks = []
+            self._patches = []
 
         def __enter__(self):
-            for target in ["tools.registry.httpx.AsyncClient", "agent.graph.httpx.AsyncClient"]:
-                p = patch(target)
-                mock_cls = p.start()
-                self.patches.append(p)
-                m = MagicMock()
-                m.__aenter__ = AsyncMock(return_value=m)
-                m.__aexit__ = AsyncMock(return_value=None)
-                m.post = AsyncMock(side_effect=self.handler)
-                mock_cls.return_value = m
-                self.mocks.append(m)
+            from contextlib import asynccontextmanager
+
+            m = MagicMock()
+            m.post = AsyncMock(side_effect=self.handler)
+            # stream 支持 (用于 node_generate_answer 流式路径)
+            m.stream = AsyncMock()
+
+            @asynccontextmanager
+            async def _mock_get_http_client(timeout=30.0):
+                yield m
+
+            # 需要 patch 所有 import 位置 — from X import Y 创建了本地绑定
+            for target in [
+                "tools.registry.get_http_client",
+                "agent.graph.get_http_client",
+            ]:
+                p = patch(target, side_effect=_mock_get_http_client)
+                p.start()
+                self._patches.append(p)
+
             return self
 
         def __exit__(self, *args):
-            for p in self.patches:
+            for p in self._patches:
                 p.stop()
 
     # ── 通用 handler 构建器 ──

@@ -22,11 +22,12 @@
 
 - **实时搜索**: Tavily API 联网搜索，突破 LLM 知识时效限制
 - **智能改写**: LLM 驱动的查询改写，将口语化提问转为精准搜索词
-- **双层过滤**: URL 去重 + LLM 相关性打分，减少 **60% 无效 Token**
+- **并行搜索**: 子查询并行搜索 + Tavily 原始分数过滤，省去冗余 LLM 打分调用
 - **SSE 流式输出**: LLM 答案逐 Token 推送到前端，实时打字效果
 - **多层容错**: 指数退避重试 + LLM 降级回答，异常期可用性 **95%+**
 - **多轮对话**: 基于会话 ID 的上下文缓存，跨轮意图连贯
 - **限流保护**: 搜索 API 配额管理与滑动窗口限流
+- **连接池复用**: 全局共享 httpx 客户端，消除 TCP/TLS 握手开销
 - **双前端**: Next.js 16 生产前端 + Streamlit 开发调试面板
 
 ## 🏗️ 架构
@@ -40,24 +41,21 @@
 │ Tailwind CSS 4    │   event: done        │  Agent Pipeline│   Search API       │ API             │
 │ App Router        │   event: error       │               │                    │                │
 ├──────────────────┤                       ├───────────────┤                    └────────────────┘
-│ Streamlit 面板    │                       │ 服务器重启时自动 │
-│ (port 8501)       │                       │ 触发构建         │
-│ 开发调试用         │                       │                 │
-└──────────────────┘                       └─────────────────┘
+│ Streamlit 面板    │                       │ 全局 httpx     │
+│ (port 8501)       │                       │ 连接池复用     │
+│ 开发调试用         │                       │               │
+└──────────────────┘                       └───────────────┘
 ```
 
 ### Agent 工作流
 
 ```
 ┌──────────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-│  用户输入     │ ──→ │ 查询改写  │ ──→ │ 实时搜索  │ ──→ │ 结果过滤  │
+│  用户输入     │ ──→ │ 查询改写  │ ──→ │ 并行搜索  │ ──→ │ 答案生成  │
 └──────────────┘     └──────────┘     └──────────┘     └──────────┘
-                                                              │
-                                              ┌───────────────┘
-                                              ↓
-                                         ┌──────────┐     ┌──────────┐
-                                         │ 答案生成  │ ←── │ 错误恢复  │
-                                         └──────────┘     └──────────┘
+                                           │                  │
+                                     子查询并行            错误恢复
+                                     跳过LLM打分           (降级回答)
 ```
 
 ## 📁 项目结构
@@ -67,42 +65,47 @@ qa/
 ├── agent/                          # Agent 核心模块
 │   ├── __init__.py                 # 模块入口
 │   ├── graph.py                    # LangGraph 状态图 (核心编排)
-│   ├── models.py                   # Pydantic 数据模型
+│   ├── models.py                   # Pydantic 数据模型 + AgentState TypedDict
 │   └── streaming.py                # SSE 流式编排器
 ├── tools/                          # 工具注册中心
 │   ├── __init__.py                 # 工具模块
-│   └── registry.py                 # 工具注册: 搜索/改写/打分/降级
+│   └── registry.py                 # 4 个工具: 搜索/改写/打分/降级 + 组合流水线
 ├── memory/                         # 会话缓存
 │   ├── __init__.py                 # 内存模块
 │   └── session_store.py            # 会话缓存 (TTL 过期)
 ├── utils/                          # 工具函数
 │   ├── __init__.py                 # 工具函数模块
-│   └── helpers.py                  # URL 去重, Token 计数, 限流, 裁剪
+│   ├── helpers.py                  # URL 去重, Token 计数, 限流, 裁剪
+│   └── http_client.py              # 全局共享 HTTP 客户端 (连接池复用)
 ├── tests/                          # 测试 (131 条)
-│   ├── test_core.py                # 单元测试 (去重/Token/限流/会话)
-│   ├── test_registry.py            # 工具注册中心测试
-│   ├── test_graph.py               # Agent 状态图节点测试
-│   ├── test_config.py              # 配置加载测试
-│   └── test_e2e.py                 # 端到端测试
+│   ├── __init__.py                 # 测试包
+│   ├── test_core.py                # 单元测试 (去重/Token/限流/会话/模型)
+│   ├── test_registry.py            # 工具注册中心测试 (搜索/改写/打分/降级/流水线)
+│   ├── test_graph.py               # 状态图节点 + SearchAgent 类测试
+│   ├── test_config.py              # 配置加载 + 单例测试
+│   └── test_e2e.py                 # 端到端流水线 + 路由 + 会话测试
 ├── evals/                          # 行为评估
-│   ├── golden_dataset.json         # 黄金行为数据集 (33 用例)
-│   ├── evaluate.py                 # 自动化评估框架
-│   └── report.html                 # HTML 评估报告
+│   ├── __init__.py                 # 评估包
+│   ├── golden_dataset.json         # 黄金行为数据集 (33 用例, 92 断言)
+│   ├── evaluate.py                 # 自动化评估框架 (7 类别, HTML/JSON 报告)
+│   ├── benchmark.py                # 延迟 & Token 基准测试 (对比优化前后)
+│   ├── report.html                 # HTML 评估报告 (自动生成)
+│   └── benchmark.html              # HTML 基准测试报告 (自动生成)
 ├── frontend/                       # Next.js 16 前端
 │   ├── app/
 │   │   ├── layout.tsx              # 根布局 (Geist 字体)
 │   │   ├── page.tsx                # 应用入口页
-│   │   ├── globals.css             # 全局样式
+│   │   ├── globals.css             # 全局样式 (Tailwind CSS 4)
 │   │   └── api/chat/stream/
-│   │       └── route.ts            # API 代理 (Next.js → FastAPI)
+│   │       └── route.ts            # API 代理 (Next.js → FastAPI rewrite)
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── ChatArea.tsx         # 聊天区域 (消息列表 + 输入框)
 │   │   │   ├── ChatInput.tsx        # 消息输入框
-│   │   │   ├── MessageBubble.tsx    # 消息气泡
+│   │   │   ├── MessageBubble.tsx    # 消息气泡 (Markdown 渲染)
 │   │   │   ├── Sidebar.tsx          # 侧边栏 (会话管理)
 │   │   │   ├── SourcesPanel.tsx     # 来源面板
-│   │   │   ├── MetaBar.tsx          # 元信息栏
+│   │   │   ├── MetaBar.tsx          # 元信息栏 (延迟/Token/置信度)
 │   │   │   └── StreamingToken.tsx   # 流式 Token 动画
 │   │   ├── hooks/
 │   │   │   └── useSSE.ts            # SSE 流式连接 Hook
@@ -111,17 +114,18 @@ qa/
 │   │   │   └── api.ts               # API 调用封装
 │   │   └── providers/
 │   │       └── ChatProvider.tsx      # 聊天状态管理 (React Context)
-│   ├── next.config.ts               # Next.js 配置 (rewrites 代理)
+│   ├── next.config.ts               # Next.js 配置 (rewrites 代理 + standalone 输出)
 │   ├── package.json                 # 依赖: Next.js 16, React 19, Tailwind CSS 4
 │   └── tsconfig.json                # TypeScript 配置
-├── server.py                       # FastAPI 后端入口 (SSE + REST API)
+├── server.py                       # FastAPI 后端入口 (SSE + REST API + 生命周期管理)
 ├── app.py                           # Streamlit 开发调试面板
-├── config.py                        # 全局配置 (pydantic-settings)
+├── config.py                        # 全局配置 (pydantic-settings, 单例)
 ├── requirements.txt                 # Python 依赖
 ├── Dockerfile.backend               # 后端 Docker 镜像 (python:3.12-slim)
 ├── Dockerfile.frontend              # 前端 Docker 镜像 (多阶段 node:22-alpine)
-├── docker-compose.yml               # 一键部署编排
+├── docker-compose.yml               # 一键部署编排 (bridge 网络 + 健康检查)
 ├── .dockerignore                    # Docker 忽略规则
+├── .env                             # 环境变量 (LLM_API_KEY, TAVILY_API_KEY 等, git-ignored)
 ├── fix-and-start.ps1                # Windows 一键修复 & 启动脚本
 └── README.md
 ```
@@ -134,8 +138,7 @@ qa/
 
 ```bash
 # 1. 克隆项目后，先配置 API 密钥
-cp .env.example .env
-# 用编辑器打开 .env，填入真实的 API Key
+# 编辑 .env，填入真实的 API Key
 # LLM_API_KEY=sk-your-real-key
 # TAVILY_API_KEY=tvly-your-real-key
 
@@ -173,13 +176,13 @@ docker compose down
 | 服务 | 容器内端口 | 宿主机端口 | 说明 |
 |------|-----------|-----------|------|
 | `search-backend` | 8000 | 8000 | FastAPI + uvicorn，SSE 流式聊天 |
-| `search-frontend` | 3000 | 3001 | Next.js 16 生产模式 |
+| `search-frontend` | 3000 | 3001 | Next.js 16 生产模式 (standalone) |
 
 **常见问题排查**：
 
 ```bash
 # 如果前端无法访问后端 API，检查后端是否启动
-docker compose logs backend | tail -20
+docker compose logs backend --tail 20
 
 # 如果需要完全重建（清除缓存）
 docker compose down
@@ -208,8 +211,9 @@ pip install -r requirements.txt
 
 #### 2. 配置 API 密钥
 
+在 `.env` 文件中填入 API Key：
+
 ```bash
-# 创建 .env 文件并填入 API Key
 # LLM_API_KEY=sk-xxx
 # TAVILY_API_KEY=tvly-xxx
 # LLM_API_BASE=https://api.openai.com/v1   (可选，默认值)
@@ -227,7 +231,7 @@ python server.py
 ```
 
 服务启动后可访问：
-- API 文档: http://localhost:8000/docs
+- API 文档 (Swagger): http://localhost:8000/docs
 - 健康检查: http://localhost:8000/api/health
 
 #### 4. 启动前端 (二选一)
@@ -261,14 +265,19 @@ pytest tests/test_graph.py -v     # 状态图节点 (31 条)
 pytest tests/test_config.py -v    # 配置加载 (18 条)
 pytest tests/test_e2e.py -v       # 端到端 (18 条)
 
-# 行为评估 (33 用例, 92 断言)
-python -m evals.evaluate
-python -m evals.evaluate -r html  # 生成 HTML 报告
+# 行为评估 (33 用例, 92 断言) + 基准测试
+python -m evals.evaluate                     # 运行全部评估
+python -m evals.evaluate -r html             # 生成 HTML 报告
+python -m evals.evaluate -c happy_path       # 按类别运行
+python -m evals.evaluate --case happy-001    # 单条用例
+python -m evals.benchmark                    # 延迟 & Token 对比摘要
+python -m evals.benchmark --html             # 生成 HTML 基准报告
+python -m evals.benchmark --json             # 输出 JSON 格式
 ```
 
 ## 🧪 测试分层
 
-项目采用**三层金字塔**测试策略，131 条测试 + 33 条评估用例全部 mock 外部 API，无需联网即可运行。
+项目采用**三层金字塔**测试策略，131 条测试 + 33 条评估用例（92 断言）全部 mock 外部 API，无需联网即可运行。
 
 ### 第一层: 单元测试 (`test_core.py` + `test_config.py`) — 51 条
 
@@ -281,7 +290,7 @@ python -m evals.evaluate -r html  # 生成 HTML 报告
 | `TestContextTrimming` | Top-K + Token 裁剪 | 4 |
 | `TestFormatSearchContext` | 搜索结果格式化 | 2 |
 | `TestSessionStore` | 会话 TTL 存储 | 5 |
-| `TestModels` | Pydantic 数据模型 | 3 |
+| `TestModels` | Pydantic 数据模型 (SearchResult/Answer/Query) | 3 |
 | `TestAPIConfig` | 环境变量加载、SecretStr 安全、超限校验 | 7 |
 | `TestAgentConfig` | 默认值、可变性、实例隔离 | 3 |
 | `TestSingletonFunctions` | 单例缓存、类型区分 | 3 |
@@ -317,26 +326,40 @@ python -m evals.evaluate -r html  # 生成 HTML 报告
 | `TestSessionManagement` | 自动 session + 清除会话 | 2 |
 | `TestResultValidation` | 来源去重 + 延迟记录 + 流式输出 | 3 |
 
+### 评估类别 (7 类, 33 用例, 92 断言)
+
+| 类别 | 用例 | 覆盖场景 |
+|------|------|----------|
+| `happy_path` | 6 | 正常流水线 (事实查询/对比/指南/新闻/多语言) |
+| `degradation` | 5 | 降级路径 (搜索失败/答案失败/改写失败/打分失败/超时) |
+| `routing` | 5 | 路由逻辑 (搜索后/生成后/缺键边界) |
+| `tool_behavior` | 6 | 工具行为 (搜索/SearchResponse/改写/打分/降级/流水线) |
+| `multi_turn` | 4 | 多轮对话 (历史累积/上限裁剪/清除会话) |
+| `state_integrity` | 2 | 状态完整性 (AgentState 键/GeneratedAnswer 字段) |
+| `edge_case` | 5 | 边缘情况 (空查询/单字符/全角/超长/中文) |
+
 ## 🔧 工具注册
 
 项目遵循**职责单一原则**注册 4 个工具：
 
 | 工具 | 类别 | 职责 |
 |------|------|------|
-| `tavily_search` | 搜索 | Tavily API 实时联网搜索 |
-| `query_rewriter` | 改写 | LLM 口语化→精准查询词 |
-| `relevance_scorer` | 打分 | LLM 0-1 相关性评分 |
-| `fallback_answer` | 降级 | 搜索不可用时 LLM 知识回答 |
+| `tavily_search` | 搜索 | Tavily API 实时联网搜索，使用 `get_http_client` 连接池复用 |
+| `query_rewriter` | 改写 | LLM 口语化→精准查询词，支持子查询拆分 + 意图识别 |
+| `relevance_scorer` | 打分 | LLM 0-1 相关性评分 (默认关闭，使用 Tavily 原始分数) |
+| `fallback_answer` | 降级 | 搜索不可用时 LLM 知识回答，带 ⚠️ 标记 |
+
+另有组合工具 `search_and_filter_pipeline()` 串联搜索→去重→(可选)打分→裁剪完整流水线。
 
 ## 📡 API 端点
 
 | 端点 | 方法 | 描述 |
 |------|------|------|
-| `/api/chat/stream` | POST | SSE 流式聊天 |
+| `/api/chat/stream` | POST | SSE 流式聊天 (query, session_id, model, search_depth, top_k) |
 | `/api/session/{id}` | GET | 获取会话历史 |
 | `/api/session/{id}` | DELETE | 清除会话 |
-| `/api/config/defaults` | GET | 获取默认配置 |
-| `/api/health` | GET | 健康检查 |
+| `/api/config/defaults` | GET | 获取默认配置 (model, search_depth, top_k, llm_api_base) |
+| `/api/health` | GET | 健康检查 (status, active_sessions) |
 
 ### SSE 事件类型
 
@@ -352,10 +375,10 @@ event: error     → {message,code}
 
 | 故障类型 | 恢复策略 |
 |----------|----------|
-| 搜索 API 超时 | 指数退避重试 3 次 → LLM 降级回答 |
-| 查询改写失败 | 回退到原始用户输入 |
-| 相关性打分失败 | 使用搜索 API 原始分数 |
-| LLM API 故障 | 友好错误提示 |
+| 搜索 API 超时 | 异步指数退避重试 3 次 → LLM 降级回答 |
+| 查询改写失败 (JSON 解析/网络异常) | 回退到原始用户输入 |
+| 相关性打分失败 | 使用 Tavily 原始分数 (已默认跳过 LLM 打分) |
+| LLM API 故障 | 友好错误提示 + 二次降级 |
 | 配额耗尽 | 滑动窗口限流，提前拦截 |
 
 ## 🐳 Docker 部署详解
@@ -369,7 +392,7 @@ event: error     → {message,code}
 
 ```bash
 # 1. 配置 API 密钥
-# 创建 .env 文件并填入真实的 API Key
+# 编辑 .env 文件并填入真实的 API Key
 # LLM_API_KEY=sk-your-real-key
 # TAVILY_API_KEY=tvly-your-real-key
 
@@ -422,8 +445,10 @@ curl -I http://localhost:3001
 
 - 正常期可用性: **≈100%**
 - 异常期可用性: **95%+**
-- Token 节省: **60%** (URL 去重 + 相关性打分双层过滤)
-- 查询改写贡献: 命中率提升 **≈35%**
+- LLM 调用减少: 5次 → 2次 (省 60%)
+- Prompt Token 节省: **95.7%** (13,397 → 572 tokens/轮)
+- 首 Token 延迟: 子查询并行 + 无打分等待，预计降低 **50%+**
+- 连接池复用: 消除每次 HTTP 调用的 TCP/TLS 握手开销
 
 ## 📊 业务场景
 

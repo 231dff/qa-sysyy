@@ -176,10 +176,8 @@ class TestNodeSearch:
 
             result = await node_search(state)
 
-        # 主查询 + 最多 2 个子查询 + 3 次打分 = 6 次调用
-        # 实际: 主查询(Tavily) + 主查询(score) + 子查询1(Tavily) + 子查询1(score) + 子查询2(Tavily) + 子查询2(score)
-        # = 6 次调用
-        assert call_count[0] == 6
+        # 主查询 + 最多 2 个子查询 = 3 次 Tavily 调用 (LLM 打分默认已跳过)
+        assert call_count[0] == 3
         assert result["search_failed"] is False
 
     @pytest.mark.asyncio

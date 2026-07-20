@@ -1,0 +1,75 @@
+# ============================================================
+# Prometheus 告警规则 — 智能搜索助手
+# 基于可用性、错误率、延迟阈值触发告警
+# ============================================================
+
+groups:
+  - name: search-agent-availability
+    rules:
+      # ── 可用性 < 95% 持续 5 分钟 ──
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (path)
+            /
+            sum(rate(http_requests_total[5m])) by (path)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "端点 {{ $labels.path }} 5xx 错误率 > 5%"
+          description: "{{ $labels.path }} 在过去 5 分钟内 5xx 错误率为 {{ $value | humanizePercentage }}，超过 95% SLA 阈值"
+
+      # ── 请求延迟 P95 > 10s ──
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          ) > 10
+        for: 5m
+        labels:
+          severity: warning
+          category: latency
+        annotations:
+          summary: "端点 {{ $labels.path }} P95 延迟 > 10s"
+          description: "{{ $labels.path }} P95 延迟为 {{ $value }}s，超过 10s 阈值"
+
+      # ── 服务未抓取 ──
+      - alert: ServiceDown
+        expr: up{job="search-agent-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "后端服务无响应"
+          description: "Prometheus 无法从 search-agent-backend 抓取指标，服务可能已宕机"
+
+      # ── 搜索失败率 > 10% ──
+      - alert: HighSearchFailureRate
+        expr: |
+          (
+            sum(rate(search_requests_total{status="error"}[5m]))
+            /
+            sum(rate(search_requests_total[5m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+          category: search
+        annotations:
+          summary: "搜索 API 失败率 > 10%"
+          description: "Tavily 搜索失败率为 {{ $value | humanizePercentage }}，可能影响回答质量"
+
+      # ── Token 消耗异常高 ──
+      - alert: HighTokenConsumption
+        expr: sum(rate(tokens_consumed_total[15m])) > 100000
+        for: 10m
+        labels:
+          severity: info
+          category: cost
+        annotations:
+          summary: "Token 消耗速率异常"
+          description: "15 分钟内 Token 消耗速率 {{ $value }} tokens/s，超出正常范围"

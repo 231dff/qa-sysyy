@@ -28,15 +28,17 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV BACKEND_URL=http://backend:8000
 
-# 复制 standalone 构建产物
-COPY --from=builder /app/next.config.ts ./
-COPY --from=builder /app/public ./public
+# 复制 standalone 构建产物 (monorepo 子目录 → standalone/frontend/)
 COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+# public 目录在阶段 1 的 /app/public (monorepo: frontend/public → /app/public)
+COPY --from=builder /app/public ./frontend/public
+# static 文件在 /app/.next/static
+COPY --from=builder /app/.next/static ./frontend/.next/static
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+# monorepo 构建: server.js 在 standalone/frontend/ 子目录下
+CMD ["node", "frontend/server.js"]

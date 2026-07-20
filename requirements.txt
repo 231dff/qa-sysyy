@@ -30,6 +30,9 @@ tiktoken>=0.7.0
 xxhash>=3.4.0
 tenacity>=8.0.0
 
+# ———— 监控 & 可观测性 ————
+prometheus-client>=0.21.0
+
 # ———— 测试 ————
 pytest>=8.0.0
 pytest-asyncio>=0.24.0

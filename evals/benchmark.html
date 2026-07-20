@@ -1,0 +1,54 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><title>基准测试报告</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui,sans-serif;background:#f8fafc;padding:2rem}
+.container{max-width:1000px;margin:0 auto}h1{font-size:1.5rem;margin-bottom:.5rem}h3{margin:1rem 0 .5rem}
+.card{background:#fff;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 1px 3px #0001}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}
+.stat{text-align:center;padding:1rem;background:#f1f5f9;border-radius:8px}
+.stat .v{font-size:1.8rem;font-weight:700}.stat .l{font-size:.75rem;color:#64748b}
+.positive{color:#16a34a}.negative{color:#dc2626}
+table{width:100%;border-collapse:collapse;margin-top:.5rem}th,td{text-align:left;padding:.5rem .8rem;border-bottom:1px solid #e2e8f0}
+th{background:#f8fafc;font-weight:600}tr:hover{background:#f8fafc}
+.bar-container{display:flex;gap:.5rem;align-items:center;margin:.5rem 0}
+.bar-a,.bar-b{height:24px;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:.75rem;color:#fff;font-weight:600}
+.bar-a{background:#dc2626}.bar-b{background:#16a34a}
+.footer{text-align:center;color:#94a3b8;font-size:.8rem;margin-top:2rem}
+</style></head><body><div class="container">
+<h1>📊 基准测试报告</h1>
+<p>v1.0 &middot; 2026-07-20 06:31 UTC &middot; mock 外部 API</p>
+
+<div class="card"><h3>⏱️ 延迟对比</h3>
+<div class="grid">
+<div class="stat"><div class="v">141<span style="font-size:.9rem">ms</span></div><div class="l">优化前总耗时</div></div>
+<div class="stat"><div class="v positive">3<span style="font-size:.9rem">ms</span></div><div class="l">优化后总耗时</div></div>
+<div class="stat"><div class="v positive">-138<span style="font-size:.9rem">ms</span></div><div class="l">节省</div></div>
+<div class="stat"><div class="v positive">98%</div><div class="l">延迟降低</div></div>
+</div>
+
+<div style="margin-top:1rem">
+<h4>Mode A (优化前)</h4>
+<table><tr><th>环节</th><th>耗时(ms)</th><th>Prompt Token</th><th>LLM调用</th><th>备注</th></tr><tr><td>1. 查询改写 (LLM)</td><td>137</td><td>277</td><td>1</td><td></td></tr><tr><td>2. 搜索+打分 (串行×3次)</td><td>4</td><td>3,528</td><td>1</td><td>Tavily 3次 + LLM打分 3次, 有效结果 10条</td></tr><tr><td>3. 答案生成 (LLM)</td><td>0</td><td>1,434</td><td>1</td><td>阻塞路径</td></tr></table>
+<h4>Mode B (优化后)</h4>
+<table><tr><th>环节</th><th>耗时(ms)</th><th>Prompt Token</th><th>LLM调用</th><th>备注</th></tr><tr><td>1. 查询改写 (LLM)</td><td>0</td><td>277</td><td>1</td><td></td></tr><tr><td>2. 搜索 (并行×3, 无LLM打分)</td><td>2</td><td>0</td><td>0</td><td>3路 Tavily 并行, 无LLM打分, 有效结果 10条</td></tr><tr><td>3. 答案生成 (LLM)</td><td>1</td><td>1,434</td><td>1</td><td>阻塞路径</td></tr></table>
+</div></div>
+
+<div class="card"><h3>🧮 Token 对比</h3>
+<div class="grid">
+<div class="stat"><div class="v">3<span style="font-size:.9rem">次</span></div><div class="l">优化前 LLM 调用</div></div>
+<div class="stat"><div class="v positive">2<span style="font-size:.9rem">次</span></div><div class="l">优化后 LLM 调用</div></div>
+<div class="stat"><div class="v">5,239</div><div class="l">优化前 Prompt Token</div></div>
+<div class="stat"><div class="v positive">1,711 <span style="font-size:.75rem">(67%↓)</span></div><div class="l">优化后 Prompt Token</div></div>
+</div></div>
+
+<div class="card"><h3>🔍 Token 消耗拆解</h3>
+<table><tr><th>环节</th><th>输入 Token</th><th>输出 Token</th><th>合计</th><th>备注</th></tr><tr><td>查询改写 (LLM)</td><td>274</td><td>86</td><td>360</td><td>每次都执行，无法省略</td></tr><tr><td>相关性打分 (LLM)</td><td>4,275</td><td>464</td><td>4,739</td><td>默认跳过改用 Tavily 分 → 每次搜索省此开销</td></tr><tr><td>答案生成 (LLM)</td><td>298</td><td>60</td><td>358</td><td>必须执行，无法省略</td></tr><tr><td>降级回答 (LLM)</td><td>189</td><td>60</td><td>249</td><td>仅搜索失败时触发，不在正常流程中</td></tr></table>
+</div>
+
+<div class="card"><h3>📋 单次问答总开销</h3>
+<table><tr><th>模式</th><th>LLM 调用</th><th>Prompt Tokens</th><th>说明</th></tr>
+<tr><td>优化前</td><td>5次</td><td>13,397</td><td>改写 + 打分×3 + 生成</td></tr>
+<tr><td>优化后</td><td>2次</td><td>572</td><td>改写 + 生成</td></tr>
+<tr style="font-weight:700;color:#16a34a"><td>节省</td><td>3次</td><td>12,825 (96%)</td><td></td></tr>
+</table></div>
+
+<div class="footer">Mock基准测试 &middot; 真实延迟取决于 API RTT &middot; 2026-07-20 06:31 UTC</div>
+</div></body></html>

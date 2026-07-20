@@ -4,7 +4,7 @@
 import { useChat } from "../providers/ChatProvider";
 
 export default function Sidebar() {
-  const { settings, updateSettings, clearHistory, newSession, stats, sessionId, sse } = useChat();
+  const { settings, updateSettings, clearHistory, newSession, sessionId, sse } = useChat();
 
   const isBusy = sse.status === "connecting" || sse.status === "streaming";
 
@@ -67,23 +67,6 @@ export default function Sidebar() {
           disabled={isBusy}
           className="w-full mb-4 disabled:opacity-50"
         />
-      </section>
-
-      <hr className="mb-4" />
-
-      {/* 统计 */}
-      <section className="mb-4">
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">📊 统计</h2>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <div className="text-2xl font-bold text-gray-800">{stats.totalQueries}</div>
-            <div className="text-xs text-gray-500">查询次数</div>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <div className="text-2xl font-bold text-gray-800">{stats.totalTokens.toLocaleString()}</div>
-            <div className="text-xs text-gray-500">Token 消耗</div>
-          </div>
-        </div>
       </section>
 
       <hr className="mb-4" />

@@ -1,0 +1,40 @@
+# ============================================================
+# Prometheus 配置 — 智能搜索助手 Agent 系统
+# 每 15 秒从后端 /api/metrics 端点抓取指标
+# ============================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+  # 标签附加
+  external_labels:
+    service: search-agent
+    environment: production
+
+# ── 抓取目标 ──
+scrape_configs:
+  - job_name: search-agent-backend
+    metrics_path: /api/metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - backend:8000
+        labels:
+          component: backend
+    # 抓取失败重试
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Prometheus 自身指标
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+        labels:
+          component: prometheus
+
+# ── 告警规则 ──
+rule_files:
+  - /etc/prometheus/alerts.yml

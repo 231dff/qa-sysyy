@@ -4,12 +4,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
 from typing import Literal, Optional
-
-import httpx
 
 from agent.models import (
     AgentState,
@@ -29,6 +28,8 @@ from utils.helpers import (
     format_search_context,
     generate_session_id,
 )
+from utils.http_client import get_http_client
+from utils.metrics import record_error, record_llm_call, record_tokens
 
 
 # ============================================================
@@ -37,17 +38,18 @@ from utils.helpers import (
 ANSWER_SYSTEM_PROMPT = """你是一个实时信息问答助手。你将获得用户的原始问题以及从互联网实时搜索到的相关信息。
 
 ## 回答规则
-1. **基于搜索信息回答**: 优先使用提供的搜索结果，而非你的训练数据
-2. **标注来源**: 每一条关键信息标注来源编号 [1] [2] 等
-3. **诚实**: 如果搜索结果不足以回答，明确说明，不要编造
-4. **结构化**: 使用 Markdown 格式，适当使用标题、列表、引用
-5. **时效提示**: 如果问题涉及实时信息，注明搜索时间
-6. **简洁准确**: 直接回答核心问题，避免冗长铺垫
+1. **基于搜索信息回答**: 优先使用提供的搜索结果，而非训练数据
+2. **标注来源**: 每条关键信息末尾标注来源 [1] [2] 等
+3. **诚实**: 搜索结果不足时明确说明，不要编造
+4. **逐条呈现**: 用简短的要点列表，每条 1-2 句话，便于快速阅读
+5. **时效提示**: 涉及实时信息时注明搜索时间
 
-## 输出格式 (Markdown)
-- 开头直接回答问题
-- 中间展开细节，标注来源
-- 结尾列出「📚 参考来源」"""
+## 输出格式要求
+- **开头**: 一句话直接回答核心问题
+- **中间**: 用无序列表 (- ) 逐条列出关键信息，每条标注来源
+- **结尾**: 如有重要参考来源，用简短的「📚 参考来源」列出
+- **禁止**: 不要用大段文字、不要多级标题、不要引用块
+- **格式**: 使用 Markdown，但保持简洁——多用列表，少用段落"""
 
 
 # ============================================================
@@ -85,8 +87,8 @@ async def node_rewrite_query(state: AgentState) -> dict:
 async def node_search(state: AgentState) -> dict:
     """
     节点: 实时搜索
-    - 使用改写后的查询及子查询执行 Tavily 搜索
-    - URL 去重 + LLM 相关性打分 + Token 裁剪
+    - 使用改写后的查询及子查询并行执行 Tavily 搜索
+    - URL 去重 + Token 裁剪（默认跳过 LLM 打分以降低延迟）
     """
     agent_cfg = get_agent_config()
 
@@ -104,13 +106,15 @@ async def node_search(state: AgentState) -> dict:
     all_fragments: list = []
     deduplicator = URLDeduplicator(window_size=agent_cfg.dedup_window)
 
-    for q in queries:
+    # 并行搜索所有查询词 (asyncio.gather)
+    async def _search_one(q: str):
         if agent_cfg.verbose:
             print(f"[节点: 实时搜索] 搜索: {q}")
+        return await search_and_filter_pipeline(q, deduplicator=deduplicator)
 
-        deduped_results, fragments = await search_and_filter_pipeline(
-            q, deduplicator=deduplicator
-        )
+    results = await asyncio.gather(*[_search_one(q) for q in queries])
+
+    for deduped_results, fragments in results:
         all_deduped.extend(deduped_results)
         all_fragments.extend(fragments)
 
@@ -191,8 +195,9 @@ async def node_generate_answer(
     # ── 流式路径：stream_callback 非 None ──
     if stream_callback is not None:
         accumulated_text = ""
+        llm_start = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with get_http_client(timeout=60.0) as client:
                 async with client.stream(
                     "POST",
                     f"{api_cfg.llm_api_base}/chat/completions",
@@ -205,6 +210,7 @@ async def node_generate_answer(
                         "temperature": 0.3,
                         "messages": messages,
                         "stream": True,
+                        "stream_options": {"include_usage": True},
                     },
                 ) as resp:
                     resp.raise_for_status()
@@ -215,6 +221,13 @@ async def node_generate_answer(
                                 break
                             try:
                                 chunk = json.loads(data_str)
+                                # 部分流式模型会在最后 chunk 返回 usage
+                                usage = chunk.get("usage")
+                                if usage:
+                                    record_tokens(
+                                        usage.get("prompt_tokens", 0),
+                                        usage.get("completion_tokens", 0),
+                                    )
                                 delta = (
                                     chunk.get("choices", [{}])[0]
                                     .get("delta", {})
@@ -226,9 +239,14 @@ async def node_generate_answer(
                             except json.JSONDecodeError:
                                 continue
 
+            llm_elapsed = time.perf_counter() - llm_start
+            record_llm_call("generate", llm_elapsed)
             answer_text = accumulated_text or "（生成失败：未收到有效响应）"
 
         except Exception as exc:
+            llm_elapsed = time.perf_counter() - llm_start
+            record_llm_call("generate", llm_elapsed)
+            record_error("llm_error")
             if agent_cfg.verbose:
                 print(f"[流式答案生成失败] {exc}")
             # 二次降级 (streaming fallback)
@@ -248,8 +266,9 @@ async def node_generate_answer(
             }
     else:
         # ── 阻塞路径 (向后兼容，所有现有测试走此路径) ──
+        llm_start = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with get_http_client(timeout=60.0) as client:
                 resp = await client.post(
                     f"{api_cfg.llm_api_base}/chat/completions",
                     headers={
@@ -266,7 +285,18 @@ async def node_generate_answer(
                 data = resp.json()
                 answer_text = data["choices"][0]["message"]["content"]
 
+            llm_elapsed = time.perf_counter() - llm_start
+            record_llm_call("generate", llm_elapsed)
+            usage = data.get("usage", {})
+            record_tokens(
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+            )
+
         except Exception as exc:
+            llm_elapsed = time.perf_counter() - llm_start
+            record_llm_call("generate", llm_elapsed)
+            record_error("llm_error")
             if agent_cfg.verbose:
                 print(f"[答案生成失败] {exc}")
             # 二次降级

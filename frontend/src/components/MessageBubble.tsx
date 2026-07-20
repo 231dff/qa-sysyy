@@ -1,7 +1,7 @@
 "use client";
 
 // 智能搜索助手 — 单条聊天消息
-import StreamingToken from "./StreamingToken";
+import MarkdownContent from "./MarkdownContent";
 import SourcesPanel from "./SourcesPanel";
 import MetaBar from "./MetaBar";
 import type { ChatMessage } from "../lib/types";
@@ -28,9 +28,7 @@ export default function MessageBubble({
           <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
         ) : (
           <>
-            <div className="text-sm leading-relaxed text-gray-800 prose prose-sm max-w-none">
-              <StreamingToken text={msg.content} isStreaming={isStreaming} />
-            </div>
+            <MarkdownContent text={msg.content} isStreaming={isStreaming} />
             {msg.sources && msg.sources.length > 0 && (
               <SourcesPanel sources={msg.sources} />
             )}

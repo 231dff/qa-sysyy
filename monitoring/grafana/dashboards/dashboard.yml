@@ -1,0 +1,17 @@
+# ============================================================
+# Grafana Dashboard 自动加载配置
+# 启动时自动导入可用性监控 Dashboard
+# ============================================================
+apiVersion: 1
+
+providers:
+  - name: "search-agent-dashboards"
+    orgId: 1
+    folder: "Search Agent"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

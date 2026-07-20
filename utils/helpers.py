@@ -4,6 +4,7 @@ URL 去重、Token 计数、指数退避、限流保护
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 import uuid
@@ -121,10 +122,13 @@ def exponential_backoff(
     max_delay: Optional[float] = None,
 ):
     """
-    指数退避装饰器
+    指数退避装饰器，兼容同步和异步函数。
     用法:
         @exponential_backoff(max_retries=3)
-        def flaky_api_call(): ...
+        async def flaky_api_call(): ...
+
+        @exponential_backoff(max_retries=3)
+        def flaky_sync_call(): ...
     """
     cfg = get_agent_config()
     _max_retries = max_retries if max_retries is not None else cfg.max_retries
@@ -133,7 +137,23 @@ def exponential_backoff(
 
     def decorator(func: Callable):
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        async def async_wrapper(*args, **kwargs):
+            last_exception: Optional[Exception] = None
+            for attempt in range(_max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as exc:
+                    last_exception = exc
+                    if attempt < _max_retries:
+                        delay = min(_base_delay * (2 ** attempt), _max_delay)
+                        if get_agent_config().verbose:
+                            print(f"[重试] {func.__name__} 第{attempt+1}次失败 "
+                                  f"({exc}), {delay:.1f}s 后重试...")
+                        await asyncio.sleep(delay)
+            raise last_exception  # type: ignore[misc]
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
             last_exception: Optional[Exception] = None
             for attempt in range(_max_retries + 1):
                 try:
@@ -148,7 +168,10 @@ def exponential_backoff(
                         time.sleep(delay)
             raise last_exception  # type: ignore[misc]
 
-        return wrapper
+        import asyncio as _asyncio_mod
+        if _asyncio_mod.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
 
     return decorator
 
